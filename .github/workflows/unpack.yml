@@ -1,0 +1,25 @@
+name: Unpack project
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Распаковать архив
+        run: |
+          unzip -o tenet_t7_launcher-1.0.zip -d tmp_unzip
+          cp -r tmp_unzip/dash_t7-1.8/. .
+          rm -rf tmp_unzip tenet_t7_launcher-1.0.zip
+      - name: Записать в репозиторий
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "v1.0 — Tenet T7 Launcher"
+          git push
