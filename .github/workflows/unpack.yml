@@ -5,7 +5,6 @@ on:
 
 permissions:
   contents: write
-  workflows: write
 
 jobs:
   unpack:
@@ -25,6 +24,7 @@ jobs:
             SRC=$(find tmp_unzip -type f -name "build.gradle*" -exec dirname {} \; | head -n1)
           fi
           echo "Папка проекта: $SRC"
+          rm -rf "$SRC"/.github
           cp -r "$SRC"/. .
           rm -rf tmp_unzip "$ZIP"
       - name: Записать в репозиторий
