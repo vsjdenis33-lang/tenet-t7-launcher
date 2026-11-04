@@ -29,7 +29,7 @@ android {
     // Ключ Яндекс.Погоды (v2 API): free-ключ из local.properties,
     // строка yandexweather.key. Не хранится в git.
     val yandexKey = try {
-        val propsY = Properties()
+        val propsY = java.util.Properties()
         val localY = rootProject.file("local.properties")
         if (localY.exists()) {
             localY.inputStream().use { propsY.load(it) }
@@ -52,8 +52,8 @@ android {
         // Приложение только для сайдлоада на ГУ, требований Play нет.
         minSdk = 28
         targetSdk = 28
-        versionCode = 11
-        versionName = "1.0"
+        versionCode = 12
+        versionName = "1.1"
 
         buildConfigField("String", "OPENWEATHER_KEY", "\"$owmKey\"")
         buildConfigField("String", "YANDEX_WEATHER_KEY", "\"$yandexKey\"")

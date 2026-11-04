@@ -1,14 +1,17 @@
 package com.dash.headunit.widgets
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Outline
+import android.graphics.drawable.ColorDrawable
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewOutlineProvider
+import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -21,21 +24,20 @@ import com.dash.headunit.theme.DashTheme
 import com.dash.headunit.theme.ThemeCard
 
 /**
- * Виджет «Музыка»: управление воспроизведением с телефона по Bluetooth
- * (AVRCP) или локального плеера — через активную media-сессию.
+ * Виджет «Музыка» в стиле штатной оболочки: размытая обложка фоном всей
+ * плитки, слева — вращающаяся виниловая пластинка с обложкой, далее строки
+ * источник / трек / исполнитель, тонкий прогресс и транспорт.
  *
- * Слева обложка (только если плеер её прислал — BT AVRCP обычно нет), далее строки источник / трек / исполнитель, тонкий
- * прогресс; справа транспорт: назад, play/pause и акцентная кнопка
- * перехода к следующей композиции.
- *
- * Требуется доступ к уведомлениям ([com.dash.headunit.music.MediaListenerService]).
+ * Управление воспроизведением с телефона по Bluetooth (AVRCP) или локального
+ * плеера — через активную media-сессию. Требуется доступ к уведомлениям
+ * ([com.dash.headunit.music.MediaListenerService]).
  */
 class MusicWidgetView(
     context: Context,
     private val theme: DashTheme = DashTheme.DARK,
     private val widgetId: String = "",
     settingsStore: WidgetSettingsStore? = null
-) : LinearLayout(context) {
+) : FrameLayout(context) {
 
     /** Блок спектра (опция виджета); null — выключен. */
     private val spectrum: SpectrumView? =
@@ -45,7 +47,15 @@ class MusicWidgetView(
             null
         }
 
-    private val artView = ImageView(context)
+    /** Размытая обложка фоном (уменьшенная копия — при растяжении даёт блюр). */
+    private val bgView = ImageView(context)
+
+    /** Затемнение поверх фона, чтобы текст читался. */
+    private val scrim = View(context)
+
+    /** Виниловая пластинка вместо квадратной обложки. */
+    private val vinyl = VinylView(context)
+
     private val sourceView = TextView(context)
     private val titleView = TextView(context)
     private val artistView = TextView(context)
@@ -58,35 +68,47 @@ class MusicWidgetView(
     private val btnNext = ImageButton(context)
     private val accessBtn = Button(context)
 
+    /** Источник фона, чтобы не пересоздавать блюр на каждом тике. */
+    private var bgArt: Bitmap? = null
+
     private val hubListener: () -> Unit = { render() }
     private val spectrumKey = "music:$widgetId"
 
     init {
-        orientation = VERTICAL
-        gravity = Gravity.CENTER_VERTICAL
-        // Основная строка: обложка / тексты / транспорт; под ней — спектр (опция).
+        clipToOutline = true
+        outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) {
+                outline.setRoundRect(0, 0, view.width, view.height, dp(12).toFloat())
+            }
+        }
+        setOnClickListener { onBodyTap() }
+
+        // Слой 1: размытая обложка на весь виджет.
+        bgView.apply {
+            visibility = GONE
+            scaleType = ImageView.ScaleType.CENTER_CROP
+        }
+        addView(bgView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+
+        // Слой 2: затемнение цветом карточки темы.
+        scrim.background = ColorDrawable(scrimColor())
+        addView(scrim, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+
+        // Слой 3: контент.
+        val content = LinearLayout(context).apply {
+            orientation = VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+        }
+
         val main = LinearLayout(context).apply {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        // Тап по свободной области: без доступа — открыть настройки
-        // уведомлений, иначе — обновить. Доступ проверяем напрямую
-        // по Settings.Secure (надёжнее флага опроса сессий).
-        // Плюс явная кнопка: по корпусу можно и промахнуться.
-        setOnClickListener { onBodyTap() }
 
-        // Обложка со скруглением; без картинки скрыта — заглушка-квадрат не нужна.
-        artView.apply {
-            visibility = GONE
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            clipToOutline = true
-            outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: Outline) {
-                    outline.setRoundRect(0, 0, view.width, view.height, dp(10).toFloat())
-                }
-            }
-        }
-        main.addView(artView, LayoutParams(dp(84), dp(84)).apply { marginEnd = dp(12) })
+        // Виниловая пластинка со скруглением не нужна — она круглая сама.
+        vinyl.visibility = GONE
+        main.addView(vinyl, LayoutParams(dp(96), dp(96)).apply { marginEnd = dp(14) })
 
         // Тексты.
         val texts = LinearLayout(context).apply {
@@ -115,8 +137,8 @@ class MusicWidgetView(
         val progress = LinearLayout(context).apply { orientation = HORIZONTAL }
         progressFill.setBackgroundColor(theme.accent)
         progressEmpty.setBackgroundColor(theme.cardBorder)
-        progress.addView(progressFill, LayoutParams(0, dp(3), 0f))
-        progress.addView(progressEmpty, LayoutParams(0, dp(3), 1f))
+        progress.addView(progressFill, LinearLayout.LayoutParams(0, dp(3), 0f))
+        progress.addView(progressEmpty, LinearLayout.LayoutParams(0, dp(3), 1f))
         // Строка времени: текущая позиция трека слева, длительность справа.
         timeElapsedView.apply {
             setTextColor(theme.secondaryText)
@@ -131,7 +153,7 @@ class MusicWidgetView(
         })
         val times = LinearLayout(context).apply { orientation = HORIZONTAL }
         times.addView(timeElapsedView, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
-        times.addView(View(context), LayoutParams(0, 0, 1f))
+        times.addView(View(context), LinearLayout.LayoutParams(0, 0, 1f))
         times.addView(timeTotalView, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
         texts.addView(times, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         accessBtn.apply {
@@ -146,7 +168,7 @@ class MusicWidgetView(
         texts.addView(accessBtn, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(6)
         })
-        main.addView(texts, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+        main.addView(texts, LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
 
         // Транспорт: назад / play-pause / ВПЕРЁД (акцент, крупнее) —
         // квадратные кнопки, выровнены по нижнему краю.
@@ -164,11 +186,13 @@ class MusicWidgetView(
         controls.addView(btnPlay)
         controls.addView(btnNext)
         main.addView(controls, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
-        addView(main, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+
+        content.addView(main, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         spectrum?.let {
             it.minimumHeight = dp(32)
-            addView(it, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
+            content.addView(it, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
         }
+        addView(content, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
 
         render()
     }
@@ -201,6 +225,10 @@ class MusicWidgetView(
         TypedValue.applyDimension(
             TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), resources.displayMetrics
         ).toInt()
+
+    /** Цвет затемнения фона: карточный, плотный — текст читается всегда. */
+    private fun scrimColor(): Int =
+        (theme.cardBackground and 0x00FFFFFF) or 0xAA000000.toInt()
 
     private fun onBodyTap() {
         if (MusicHub.data == null && MusicHub.needsAccess(context)) {
@@ -259,8 +287,10 @@ class MusicWidgetView(
         val d = MusicHub.data
         if (spectrum != null) SpectrumHub.setPlaying(spectrumKey, d?.playing == true)
         if (d == null) {
-            artView.setImageDrawable(null)
-            artView.visibility = GONE
+            vinyl.setArt(null)
+            vinyl.setPlaying(false)
+            vinyl.visibility = GONE
+            updateBackground(null)
             sourceView.text = context.getString(R.string.music_bluetooth)
             val needAccess = MusicHub.needsAccess(context)
             titleView.text = if (needAccess) {
@@ -279,12 +309,15 @@ class MusicWidgetView(
         }
         accessBtn.visibility = GONE
         if (d.art != null) {
-            artView.setImageBitmap(d.art)
-            artView.visibility = VISIBLE
+            vinyl.setArt(d.art)
+            vinyl.visibility = VISIBLE
+            updateBackground(d.art)
         } else {
-            artView.setImageDrawable(null)
-            artView.visibility = GONE
+            vinyl.setArt(null)
+            vinyl.visibility = GONE
+            updateBackground(null)
         }
+        vinyl.setPlaying(d.playing)
         sourceView.text = friendlySource(d.sourceLabel)
         titleView.text = d.title
         artistView.text = d.artist ?: d.album
@@ -303,6 +336,37 @@ class MusicWidgetView(
         }
     }
 
+    /**
+     * Обновить размытый фон. Уменьшаем обложку до крошечного размера:
+     * ImageView растягивает её с фильтрацией — получается мягкий блюр,
+     * как у штатной оболочки, без RenderScript/RenderEffect (ГУ на API 28).
+     */
+    private fun updateBackground(art: Bitmap?) {
+        if (art === bgArt) return
+        bgArt = art
+        if (art == null) {
+            bgView.setImageDrawable(null)
+            bgView.visibility = GONE
+            scrim.visibility = GONE
+            return
+        }
+        val targetW = 32
+        val targetH = (art.height * targetW / art.width).coerceAtLeast(1)
+        val tiny = try {
+            Bitmap.createScaledBitmap(art, targetW, targetH, true)
+        } catch (e: Exception) {
+            null
+        }
+        if (tiny != null) {
+            bgView.setImageBitmap(tiny)
+            bgView.visibility = VISIBLE
+            scrim.visibility = VISIBLE
+        } else {
+            bgView.visibility = GONE
+            scrim.visibility = GONE
+        }
+    }
+
     private fun formatTime(ms: Long): String {
         if (ms < 0) return context.getString(R.string.music_time_unknown)
         val totalSec = ms / 1000
@@ -311,8 +375,8 @@ class MusicWidgetView(
 
     private fun setProgress(fraction: Float) {
         val f = fraction.coerceIn(0f, 1f)
-        (progressFill.layoutParams as LayoutParams).weight = f
-        (progressEmpty.layoutParams as LayoutParams).weight = 1f - f
+        (progressFill.layoutParams as LinearLayout.LayoutParams).weight = f
+        (progressEmpty.layoutParams as LinearLayout.LayoutParams).weight = 1f - f
         progressFill.requestLayout()
         progressEmpty.requestLayout()
     }
