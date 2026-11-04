@@ -1,0 +1,113 @@
+import java.util.Properties
+
+plugins {
+    alias(libs.plugins.android.application)
+}
+
+android {
+    namespace = "com.dash.headunit"
+    compileSdk {
+        version = release(36) {
+            minorApiLevel = 1
+        }
+    }
+
+    // Ключ OpenWeatherMap (запасной источник погоды) берём из local.properties
+    // (openweathermap.key), чтобы не хранить его в git.
+    // Пример: см. local.properties.example.
+    val owmKey: String = try {
+        val props = Properties()
+        val localFile = rootProject.file("local.properties")
+        if (localFile.exists()) {
+            localFile.inputStream().use { props.load(it) }
+        }
+        (props.getProperty("openweathermap.key") ?: "").trim()
+    } catch (e: Exception) {
+        ""
+    }
+
+    // Ключ Яндекс.Погоды (v2 API): free-ключ из local.properties,
+    // строка yandexweather.key. Не хранится в git.
+    val yandexKey = try {
+        val propsY = java.util.Properties()
+        val localY = rootProject.file("local.properties")
+        if (localY.exists()) {
+            localY.inputStream().use { propsY.load(it) }
+        }
+        (propsY.getProperty("yandexweather.key") ?: "").trim()
+    } catch (e: Exception) {
+        ""
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    defaultConfig {
+        applicationId = "com.dash.headunit"
+        // ГУ 703002573AA работает на Android 9 (API 28).
+        // targetSdk держим = 28 осознанно, как у VDLauncher (у них 27):
+        // скрытый ActivityView (встраивание приложений) доступен только
+        // через greylist старых платформ; на новых API он в чёрном списке.
+        // Приложение только для сайдлоада на ГУ, требований Play нет.
+        minSdk = 28
+        targetSdk = 28
+        versionCode = 11
+        versionName = "1.0"
+
+        buildConfigField("String", "OPENWEATHER_KEY", "\"$owmKey\"")
+        buildConfigField("String", "YANDEX_WEATHER_KEY", "\"$yandexKey\"")
+    }
+
+    // Подпись релиза debug-ключом: приложение сайдлоадное, а APK должен
+    // обновляться поверх уже установленной на ГУ сборки (та же подпись —
+    // сохраняются авторизация adb и раскладка виджетов). Ключ — стандартный
+    // debug (alias androiddebugkey, пароль android), поэтому лежит в репе,
+    // чтобы локальная и CI-сборки давали одинаковую подпись.
+    signingConfigs {
+        create("release") {
+            storeFile = rootProject.file("keystore/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    // targetSdk 28 выбран осознанно (ГУ Android 9, скрытый ActivityView),
+    // Play не используется — гасим требование «targetSdk ≥ 33» в release-lint.
+    lint {
+        disable += "ExpiredTargetSdkVersion"
+    }
+}
+
+// Имя APK: tenet_t7_launcher-<buildType>.apk вместо app-….apk.
+base {
+    archivesName = "tenet_t7_launcher"
+}
+
+dependencies {
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.activity)
+    implementation(libs.androidx.appcompat)
+    implementation(libs.material)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.zxing.core)
+    testImplementation(libs.junit)
+    testImplementation(libs.json.java)
+}

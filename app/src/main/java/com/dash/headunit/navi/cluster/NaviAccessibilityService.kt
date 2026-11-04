@@ -1,0 +1,312 @@
+package com.dash.headunit.navi.cluster
+
+import com.dash.headunit.navi.ClusterNavAuto
+import android.accessibilityservice.AccessibilityService
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Looper
+import android.os.SystemClock
+import android.util.Log
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import com.dash.headunit.settings.AppSettings
+import com.dash.headunit.settings.Autostart
+import android.view.KeyEvent
+import com.dash.headunit.navi.ClusterNavLauncher
+
+/**
+ * Читает окно Яндекс Навигатора (только чтение, ничего не нажимает):
+ * ограничение скорости (layout_map_speedlimit → text_speedlimit), камеры
+ * (view_notification_speedcamera_*), остаток маршрута (textview_eta_*) и
+ * карточку манёвра (contextmaneuverview: text_maneuverballoon_distance/metrics,
+ * text_nextstreet), светофор (button_trafficlight → [TrafficLightGrab]). Так есть данные, даже когда навигатор на экране и
+ * фонового уведомления ведения нет. Тип манёвра — по снимку стрелки
+ * ([ManeuverGrab]).
+ *
+ * Яндекс 14.8 (эмулятор, 2026-10-21): карточка-view видна не всегда — часто
+ * манёвр (с полосами) рисуется прямо в карте, тогда его тут нет; у картинки
+ * стрелки нет описания, так что тип манёвра обычно неизвестен — стрелка
+ * есть только из фонового уведомления.
+ *
+ * Включается в enabled_accessibility_services — см. [ClusterSetup].
+ * Окно навигатора не обязательно активное (он под дашбордом в блоке),
+ * поэтому ищем его среди всех окон (flagRetrieveInteractiveWindows).
+ *
+ * Чтение окна — синхронные вызовы в процесс навигатора: пока он занят
+ * (холодный старт), каждый ждёт до нескольких секунд. Поэтому сканирование
+ * идёт в своём потоке — в главном оно морозило дашборд и откладывало
+ * «пинок» навигатора на старте (эмулятор 2026-10-27: до 4 с).
+ */
+class NaviAccessibilityService : AccessibilityService() {
+
+    private val main = Handler(Looper.getMainLooper())
+    private val thread = HandlerThread("NaviA11y").apply { start() }
+    private val bg = Handler(thread.looper)
+    @Volatile private var lastScan = 0L
+    @Volatile private var scheduled = false
+    private val scan = Runnable {
+        scheduled = false
+        scanNow()
+    }
+    private val poll = Runnable { scanNow() }
+
+    override fun onServiceConnected() {
+        instance = this
+        ClusterOverlay.init(this)
+        Autostart.onServiceBound(this, "спец. возможности")
+        ClusterNavAuto.init(this)
+        bg.post(scan)
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event?.packageName?.toString() != YANDEX_NAVI) return
+        // Навигатор шлёт события пачками (карта перерисовывается) — не чаще
+        // раза в SCAN_MS.
+        if (scheduled) return
+        scheduled = true
+        val wait = (lastScan + SCAN_MS - SystemClock.uptimeMillis()).coerceAtLeast(0)
+        bg.postDelayed(scan, wait)
+    }
+
+    /**
+     * Глобальная клавиша руля: срабатывает и когда дашборд не в фокусе
+     * (Навигатор на весь экран, штатный лаунчер). Освоенная клавиша
+     * ([AppSettings.wheelKey]) переключает Навигатор «экран ↔ приборка».
+     * Остальные клавиши пропускаем без изменений — поведение руля
+     * не меняется.
+     * Флаг flagRequestFilterKeyEvents объявлен в res/xml/navi_accessibility.xml;
+     * после установки новой сборки служба перечитает конфиг при переподключении
+     * (перезагрузка ГУ или выключение/включение спец. возможностей).
+     */
+    override fun onKeyEvent(event: KeyEvent?): Boolean {
+        if (event?.action != KeyEvent.ACTION_UP || event.repeatCount != 0) return false
+        val code = AppSettings.wheelKey(this)
+        if (code != -1 && event.keyCode == code) {
+            ClusterNavLauncher.toggle(this)
+            return true
+        }
+        val voice = AppSettings.wheelVoiceKey(this)
+        if (voice != -1 && event.keyCode == voice) {
+            com.dash.headunit.VoiceLaunch.launch(this)
+            return true
+        }
+        return false
+    }
+
+    override fun onInterrupt() {}
+    override fun onDestroy() {
+        bg.removeCallbacks(scan)
+        bg.removeCallbacks(poll)
+        thread.quitSafely()
+        scheduled = false
+        if (instance === this) instance = null
+        main.post { GuidanceHub.setFromA11y(null) }
+        super.onDestroy()
+    }
+
+    /** В потоке [bg]; результат — в [GuidanceHub] через главный поток. */
+    private fun scanNow() {
+        lastScan = SystemClock.uptimeMillis()
+        // Перечитываем и без событий: пока тексты навигатора не меняются
+        // (стоим в пробке, навигатор под дашбордом), событий нет, а данные
+        // в [GuidanceHub] через A11Y_FRESH_MS протухают — маршрут пропадал.
+        bg.removeCallbacks(poll)
+        val root = naviRoot()
+        if (root == null) {
+            publish(null)
+            bg.postDelayed(poll, IDLE_POLL_MS)
+            return
+        }
+        val g = try {
+            read(root)
+        } catch (e: Exception) {
+            Log.w(TAG, "scan", e)
+            null
+        }
+        publish(g)
+        bg.postDelayed(poll, if (g != null) ROUTE_POLL_MS else IDLE_POLL_MS)
+    }
+
+    /** Скан, закончившийся после onDestroy, не перетирает сброс. */
+    private fun publish(g: Guidance?) {
+        main.post { if (instance === this) GuidanceHub.setFromA11y(g) }
+    }
+
+    private fun naviRoot(): AccessibilityNodeInfo? {
+        try {
+            for (w in windows) {
+                val r = w.root ?: continue
+                if (r.packageName?.toString() == YANDEX_NAVI) return r
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "windows", e)
+        }
+        return rootInActiveWindow?.takeIf { it.packageName?.toString() == YANDEX_NAVI }
+    }
+
+    private fun read(root: AccessibilityNodeInfo): Guidance? {
+        // В блоке под дашбордом (ГУ 2026-10-31) кнопки карты с карточкой
+        // манёвра и лимитом у Яндекса «не видны» (isVisibleToUser = false у
+        // всей ветки от buttons_container), хотя тексты в них есть, а
+        // уведомления ведения в это время нет. Поэтому видимый узел — если
+        // есть, иначе любой.
+        fun nodes(id: String): List<AccessibilityNodeInfo> =
+            root.findAccessibilityNodeInfosByViewId("$YANDEX_NAVI:id/$id").orEmpty()
+
+        fun visible(id: String): AccessibilityNodeInfo? = nodes(id).firstOrNull { it.isVisibleToUser }
+
+        fun node(id: String): AccessibilityNodeInfo? = nodes(id).let { l -> l.firstOrNull { it.isVisibleToUser } ?: l.firstOrNull() }
+
+        fun text(id: String): String? =
+            node(id)?.let { it.text ?: it.contentDescription }?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+
+        val limit = SPEED_LIMIT_IDS.firstNotNullOfOrNull { GuidanceText.speedLimit(text(it)) }
+        val dist = text("text_maneuverballoon_distance")
+        val metrics = text("text_maneuverballoon_metrics")
+        val arrow = node("image_maneuverballoon_maneuver")
+        val arrowDesc = arrow?.contentDescription?.toString()
+        val street = text("text_nextstreet")
+        // Описания у стрелки нет — узнаём её по снимку экрана. В блоке под
+        // дашбордом стрелка «не видна» (ГУ 2026-10-31), а уведомления нет —
+        // других источников стрелки тогда нет вовсе (ГУ 2026-11-02: пустая
+        // плитка). Поэтому снимаем и «невидимую», если у неё есть место на
+        // экране, только реже: не нарисована — на снимке карта, и
+        // [ManeuverMatcher] её не узнает (порог уверенности).
+        val maneuver = GuidanceText.classify(arrowDesc) ?: arrow?.let {
+            val r = android.graphics.Rect().also { b -> it.getBoundsInScreen(b) }
+            val onScreen = !r.isEmpty && r.left >= 0 && r.top >= 0
+            when {
+                it.isVisibleToUser -> ManeuverGrab.maneuver(this, r, street, dist)
+                onScreen -> ManeuverGrab.maneuver(this, r, street, dist, ManeuverGrab.HIDDEN_RETRY_MS)
+                else -> ManeuverGrab.known(street)
+            }
+        }
+        // Светофор (настройка): цвет только по снимку видимой кнопки (в блоке кнопки не рисуются).
+        val tl = visible("button_trafficlight")?.takeIf { AppSettings.clusterTrafficLights(this) }?.let {
+            val r = android.graphics.Rect().also { b -> it.getBoundsInScreen(b) }
+            TrafficLightGrab.light(this, r)
+        } ?: run {
+            TrafficLightGrab.reset()
+            null
+        }
+        // Полосы: плашка в карте (или видимый контейнер в карточке) — по снимку.
+        val lanes = if (AppSettings.clusterLanes(this)) {
+            fun bounds(n: AccessibilityNodeInfo?) =
+                n?.let { android.graphics.Rect().also { b -> it.getBoundsInScreen(b) } }?.takeUnless { it.isEmpty }
+            LaneGrab.lanes(
+                this,
+                window = bounds(root) ?: android.graphics.Rect(0, 0, 1920, 720),
+                card = bounds(visible("contextmaneuverview")),
+                container = bounds(visible("lane_signs_container")),
+                street = street,
+                distance = dist,
+            )
+        } else {
+            LaneGrab.reset("выключено в настройках")
+            null
+        }
+        val camDist = text("view_notification_speedcamera_distance")
+        val camLabel = text("view_notification_speedcamera_distance_label")
+        val g = Guidance(
+            remainingDistance = text("textview_eta_distance"),
+            remainingTime = text("textview_eta_time"),
+            arrival = text("textview_eta_arrival"),
+            maneuver = maneuver,
+            distance = dist?.let { if (metrics != null) "$it $metrics" else it },
+            street = street,
+            speedLimit = limit,
+            cameraDistance = camDist?.let { if (camLabel != null) "$it $camLabel" else it },
+            cameraLimit = GuidanceText.speedLimit(text("view_notification_speedcamera_limit")),
+            overspeed = visible("view_speedlimit_alarm") != null,
+            trafficLight = tl,
+            lanes = lanes,
+            // Строка состояния внизу карты: без маршрута — улица, по которой едем.
+            currentStreet = GuidanceText.currentStreet(text("text_statuspanel")),
+        )
+        return g.takeIf { it.onRoute || it.hasWarnings || it.currentStreet != null }
+    }
+    /**
+     * Голос по второй клавише: «тапнуть» кнопку микрофона в окне Навигатора.
+     * Ищем кликабельный узел по ID вью (mic/voice) или описанию
+     * («голос», «микрофон»). true — нажали.
+     */
+    fun tapMic(): Boolean {
+        val root = naviRoot() ?: return false
+        var found: AccessibilityNodeInfo? = null
+        fun walk(n: AccessibilityNodeInfo?, depth: Int) {
+            if (n == null || found != null || depth > 40) return
+            val id = n.viewIdResourceName?.lowercase() ?: ""
+            val label = (n.contentDescription ?: n.text)?.toString()?.lowercase() ?: ""
+            if (n.isClickable &&
+                ("mic" in id || "voice" in id || "микрофон" in label || "голос" in label)
+            ) {
+                found = n
+                return
+            }
+            for (i in 0 until n.childCount) walk(n.getChild(i), depth + 1)
+        }
+        walk(root, 0)
+        val target = found ?: return false
+        return try {
+            target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Окна, которые система отдаёт службе (заголовок, пакет, границы, фокус,
+     * класс корня — DecorView активности или диалога), — для диагностики.
+     */
+    fun describeWindows(): String = try {
+        windows.joinToString("\n") { w ->
+            val b = android.graphics.Rect().also { w.getBoundsInScreen(it) }
+            val root = w.root
+            "id=${w.id} type=${w.type} layer=${w.layer} ${w.title ?: "-"} " +
+                "pkg=${root?.packageName ?: "?"} $b" +
+                (if (w.isFocused) " focused" else "") + (if (w.isActive) " active" else "") +
+                " root=${root?.className?.toString()?.substringAfterLast('.') ?: "?"}" +
+                "/${root?.childCount ?: 0}"
+        }.ifEmpty { "(пусто)" }
+    } catch (e: Exception) {
+        "ошибка: ${e.javaClass.simpleName}: ${e.message}"
+    }
+
+    /** Дерево окна навигатора текстом — для диагностики. */
+    fun dumpTree(): String {
+        val root = naviRoot() ?: return "окна $YANDEX_NAVI нет среди окон"
+        val sb = StringBuilder()
+        var count = 0
+        fun walk(n: AccessibilityNodeInfo, depth: Int) {
+            if (count++ > MAX_DUMP_NODES) return
+            sb.append("  ".repeat(depth)).append(n.className?.toString()?.substringAfterLast('.'))
+            n.viewIdResourceName?.let { sb.append(" #").append(it.substringAfter(":id/")) }
+            n.text?.let { sb.append(" \"").append(it).append('"') }
+            n.contentDescription?.let { sb.append(" desc=\"").append(it).append('"') }
+            if (!n.isVisibleToUser) sb.append(" (не виден)")
+            if (n.viewIdResourceName?.endsWith("_maneuver") == true) {
+                sb.append(' ').append(android.graphics.Rect().also { n.getBoundsInScreen(it) }.toShortString())
+            }
+            sb.append('\n')
+            for (i in 0 until n.childCount) n.getChild(i)?.let { walk(it, depth + 1) }
+        }
+        walk(root, 0)
+        return sb.toString()
+    }
+
+    companion object {
+        @Volatile
+        var instance: NaviAccessibilityService? = null
+            private set
+
+        private val SPEED_LIMIT_IDS = listOf(
+            "text_speedlimit", "speedlimitview_guidance", "view_projected_speed_limit", "speed_limit_text",
+        )
+        private const val SCAN_MS = 500L
+        /** Перечитывание окна без событий: идёт ведение / навигатора нет или стоит без маршрута. */
+        private const val ROUTE_POLL_MS = 1_000L
+        private const val IDLE_POLL_MS = 3_000L
+        private const val MAX_DUMP_NODES = 600
+        private const val TAG = "NaviA11y"
+    }
+}
