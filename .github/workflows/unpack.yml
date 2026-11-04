@@ -13,9 +13,19 @@ jobs:
       - uses: actions/checkout@v4
       - name: Распаковать архив
         run: |
-          unzip -o tenet_t7_launcher-1.0.zip -d tmp_unzip
-          cp -r tmp_unzip/dash_t7-1.8/. .
-          rm -rf tmp_unzip tenet_t7_launcher-1.0.zip
+          ZIP=$(ls *.zip 2>/dev/null | head -n1)
+          if [ -z "$ZIP" ]; then
+            echo "zip не найден — выходим"
+            exit 0
+          fi
+          unzip -o "$ZIP" -d tmp_unzip
+          SRC=$(find tmp_unzip -type f -name "settings.gradle*" -exec dirname {} \; | head -n1)
+          if [ -z "$SRC" ]; then
+            SRC=$(find tmp_unzip -type f -name "build.gradle*" -exec dirname {} \; | head -n1)
+          fi
+          echo "Папка проекта: $SRC"
+          cp -r "$SRC"/. .
+          rm -rf tmp_unzip "$ZIP"
       - name: Записать в репозиторий
         run: |
           git config user.name "github-actions"
