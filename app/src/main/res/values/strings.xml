@@ -345,6 +345,11 @@
     <string name="wheel_key_relearn">Запомнить заново</string>
     <string name="wheel_key_reset">Отвязать клавишу</string>
     <string name="widget_open_nav">Открыть навигатор</string>
+    <string name="widget_home_nav">Домой / На работу</string>
+    <string name="nav_title">Навигация: адреса</string>
+    <string name="nav_home_label">Домой</string>
+    <string name="nav_work_label">На работу</string>
+    <string name="nav_addr_hint">Адрес или 55.75, 37.61</string>
     <string name="settings_wheel_voice_t">Клавиша — голос</string>
     <string name="settings_wheel_voice_s">Короткое нажатие: голос Навигатора, иначе — Алиса</string>
     <string name="wheel_voice_none">не задана</string>

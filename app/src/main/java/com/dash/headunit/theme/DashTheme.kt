@@ -26,6 +26,8 @@ data class DashTheme(
     @ColorInt val glow: Int? = null
 ) {
     companion object {
+        const val GLASS_ID = "glass"
+
         val DARK = DashTheme(
             id = "dark",
             name = "Тёмная",
@@ -88,8 +90,25 @@ data class DashTheme(
             glow = 0xFF4D3203.toInt()
         )
 
+        /**
+         * Стекло: светлые полупрозрачные карточки с тонким белым кантом
+         * поверх тёмного фона, голубой акцент — стиль стеклянных плиток.
+         */
+        val GLASS = DashTheme(
+            id = GLASS_ID,
+            name = "Стекло",
+            background = 0xFF0B0E12.toInt(),
+            cardBackground = 0x30FFFFFF.toInt(),
+            cardBorder = 0x59FFFFFF.toInt(),
+            primaryText = 0xFFFFFFFF.toInt(),
+            secondaryText = 0xB3FFFFFF.toInt(),
+            accent = 0xFF4FC3F7.toInt(),
+            success = 0xFF69F0AE.toInt(),
+            glow = 0xFF2A5A7A.toInt()
+        )
+
         /** Все доступные темы. */
-        val ALL: List<DashTheme> = listOf(DARK, VIOLET, NAVY, CARBON)
+        val ALL: List<DashTheme> = listOf(DARK, VIOLET, NAVY, CARBON, GLASS)
     }
 }
 

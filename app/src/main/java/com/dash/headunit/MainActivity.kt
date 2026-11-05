@@ -2,6 +2,7 @@ package com.dash.headunit
 
 import com.dash.headunit.widgets.ClusterLaunchWidgetView
 import com.dash.headunit.widgets.ClusterLaunchNavWidgetView
+import com.dash.headunit.widgets.HomeWidgetView
 import android.annotation.SuppressLint
 import android.Manifest
 import android.app.Dialog
@@ -314,8 +315,17 @@ class MainActivity : AppCompatActivity() {
      * Виджеты получают тему при построении.
      */
     private fun applyThemeChrome() {
-        val card = ThemeCard.card(this, theme)
-        findViewById<View>(R.id.icon_wifi).background = card
+        // Кнопки панелей — «пилюли» с подсветкой: панель выделяется на фоне.
+        for (pillId in intArrayOf(
+            R.id.icon_wifi, R.id.icon_bluetooth, R.id.btn_night, R.id.btn_home,
+            R.id.btn_settings, R.id.btn_edit, R.id.btn_clear, R.id.btn_add,
+            R.id.btn_cluster_calibration, R.id.btn_debug
+        )) {
+            findViewById<View>(pillId)?.apply {
+                background = ThemeCard.pill(this@MainActivity, theme)
+                elevation = 6f
+            }
+        }
         // Часы в боковом баре — светлый текст под иконки бара.
         val barText = android.graphics.Color.parseColor("#EDEDED")
         for (id in intArrayOf(
@@ -324,15 +334,6 @@ class MainActivity : AppCompatActivity() {
         )) {
             findViewById<TextView?>(id)?.setTextColor(barText)
         }
-        findViewById<View>(R.id.icon_bluetooth).background = ThemeCard.card(this, theme)
-        findViewById<View>(R.id.btn_night).background = ThemeCard.card(this, theme)
-        findViewById<View>(R.id.btn_home).background = ThemeCard.card(this, theme)
-        findViewById<View>(R.id.btn_settings).background = ThemeCard.card(this, theme)
-        findViewById<View>(R.id.btn_edit).background = ThemeCard.card(this, theme)
-        findViewById<View>(R.id.btn_clear).background = ThemeCard.card(this, theme)
-        findViewById<View>(R.id.btn_add).background = ThemeCard.card(this, theme)
-        findViewById<View>(R.id.btn_cluster_calibration).background = ThemeCard.card(this, theme)
-        findViewById<View>(R.id.btn_debug).background = ThemeCard.card(this, theme)
         findViewById<View>(R.id.btn_done).background = ThemeCard.accent(this, theme)
         findViewById<ImageButton>(R.id.btn_done).setColorFilter(theme.background)
         findViewById<View>(R.id.top_glow_line).apply {
@@ -888,6 +889,11 @@ class MainActivity : AppCompatActivity() {
                 WidgetType.BUTTONS -> ButtonsWidgetView(this, wTheme)
                 WidgetType.CLUSTER_LAUNCH -> ClusterLaunchWidgetView(this, wTheme)
                 WidgetType.OPEN_NAV -> ClusterLaunchNavWidgetView(this, wTheme)
+                WidgetType.HOME_NAV -> HomeWidgetView(
+                    this, wTheme,
+                    settingsStore.getOption(spec.widgetId, HomeWidgetView.OPT_HOME, ""),
+                    settingsStore.getOption(spec.widgetId, HomeWidgetView.OPT_WORK, "")
+                )
                 WidgetType.SCREENSAVER -> ScreensaverWidgetView(
                     this, wTheme, Screensaver.config(settingsStore, spec.widgetId),
                     canToggle = { !editMode }
@@ -934,6 +940,9 @@ class MainActivity : AppCompatActivity() {
                     }
                     WidgetType.MUSIC, WidgetType.YANDEX_MUSIC -> {
                         { showMusicSettings(spec.widgetId, spec.type) }
+                    }
+                    WidgetType.HOME_NAV -> {
+                        { showHomeNavSettings(spec.widgetId) }
                     }
                     WidgetType.SCREENSAVER -> {
                         { showScreensaverSettings(spec.widgetId) }
@@ -1025,6 +1034,7 @@ class MainActivity : AppCompatActivity() {
         PickerItem(WidgetType.APP, R.string.widget_app, R.drawable.ic_nav),
         PickerItem(WidgetType.CLUSTER_LAUNCH, R.string.widget_cluster_launch, R.drawable.ic_cluster),
         PickerItem(WidgetType.OPEN_NAV, R.string.widget_open_nav, R.drawable.ic_nav),
+        PickerItem(WidgetType.HOME_NAV, R.string.widget_home_nav, R.drawable.ic_home),
         PickerItem(WidgetType.TRIP, R.string.widget_trip, R.drawable.ic_journal),
         PickerItem(WidgetType.SPEED, R.string.widget_speed, R.drawable.ic_gauge),
         PickerItem(WidgetType.OUTSIDE, R.string.widget_outside, R.drawable.ic_thermo),
@@ -1184,6 +1194,7 @@ class MainActivity : AppCompatActivity() {
             WidgetType.SCREENSAVER -> 40 to 14
             WidgetType.CLUSTER_LAUNCH -> 24 to 14
             WidgetType.OPEN_NAV -> 24 to 14
+            WidgetType.HOME_NAV -> 44 to 24
         }
         // Каскадом от левого верхнего угла, кламп — в границы сетки.
         val spec = WidgetSpec(
@@ -1982,6 +1993,51 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             emptyList()
         }
+    }
+
+    /** Настройки «Домой / На работу»: два адреса (координаты или текст). */
+    private fun showHomeNavSettings(widgetId: String) {
+        var home = settingsStore.getOption(widgetId, HomeWidgetView.OPT_HOME, "")
+        var work = settingsStore.getOption(widgetId, HomeWidgetView.OPT_WORK, "")
+        var dialog: Dialog? = null
+        val body = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            val pad = dp(10)
+            setPadding(pad, pad, pad, pad)
+        }
+        fun field(label: String, value: String): android.widget.EditText {
+            val cap = TextView(this).apply {
+                text = label
+                textSize = 15f
+                setPadding(0, dp(8), 0, dp(4))
+            }
+            body.addView(cap)
+            val edit = android.widget.EditText(this).apply {
+                setText(value)
+                hint = getString(R.string.nav_addr_hint)
+                singleLine = true
+                background = ThemeCard.card(this@MainActivity, theme)
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+            }
+            body.addView(edit, android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            return edit
+        }
+        val homeEdit = field(getString(R.string.nav_home_label), home)
+        val workEdit = field(getString(R.string.nav_work_label), work)
+        dialog = DashDialog.Builder(this)
+            .setIcon(R.drawable.ic_home)
+            .setTitle(R.string.nav_title)
+            .setView(body)
+            .setPositiveButton(R.string.edit_done) { _, _ ->
+                settingsStore.setOption(widgetId, HomeWidgetView.OPT_HOME, homeEdit.text.toString().trim())
+                settingsStore.setOption(widgetId, HomeWidgetView.OPT_WORK, workEdit.text.toString().trim())
+                buildWidgets(readSpecs())
+            }
+            .setNegativeButton(R.string.dialog_cancel, null)
+            .showFullScreen()
     }
 
     private fun resetLayout() {

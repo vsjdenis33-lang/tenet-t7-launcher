@@ -47,12 +47,15 @@ enum class WidgetType(val id: String) {
     /** Плитка-открывалка: поднимает Навигатор на основной экран. */
     OPEN_NAV("open_nav"),
 
+    /** Плитка навигации: стрелка и кнопки «Домой» / «На работу». */
+    HOME_NAV("home_nav"),
+
     /** Заставка: только настройки — гасит экран после простоя без касаний. */
     SCREENSAVER("screensaver");
 
     /** Наименьшая ширина в ячейках сетки: «Заставка» — одна иконка-кнопка, ей можно уже. */
     val minW: Int
-        get() = if (this == SCREENSAVER || this == CLUSTER_LAUNCH || this == OPEN_NAV) 8 else DashboardGridLayout.MIN_W
+        get() = if (this == SCREENSAVER || this == CLUSTER_LAUNCH || this == OPEN_NAV || this == HOME_NAV) 8 else DashboardGridLayout.MIN_W
 
     companion object {
         fun byId(id: String): WidgetType =

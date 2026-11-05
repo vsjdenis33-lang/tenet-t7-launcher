@@ -10,13 +10,37 @@ import android.util.TypedValue
  */
 object ThemeCard {
 
-    /** Карточка виджета/кнопки: заливка + тонкая рамка, радиус 12dp. */
+    /** Карточка виджета/кнопки: заливка + тонкая рамка; в теме
+     *  «Стекло» — светлая полупрозрачная плёнка с крупным радиусом. */
     fun card(context: Context, theme: DashTheme): GradientDrawable =
         GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(context, 12)
-            setColor(theme.cardBackground)
-            setStroke(dp(context, 1).toInt(), theme.cardBorder)
+            if (theme.id == DashTheme.GLASS_ID) {
+                orientation = GradientDrawable.Orientation.TOP_BOTTOM
+                colors = intArrayOf(0x40FFFFFF, 0x22FFFFFF)
+                cornerRadius = dp(context, 20)
+                setStroke(dp(context, 2).toInt(), 0x59FFFFFF.toInt())
+            } else {
+                cornerRadius = dp(context, 12)
+                setColor(theme.cardBackground)
+                setStroke(dp(context, 1).toInt(), theme.cardBorder)
+            }
+        }
+
+    /** Кнопка-пилюля для навигационной панели: крупный радиус и мягкая
+     *  рамка; в теме «Стекло» — яркая светлая плёнка, панель выделяется. */
+    fun pill(context: Context, theme: DashTheme): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(context, 24)
+            if (theme.id == DashTheme.GLASS_ID) {
+                orientation = GradientDrawable.Orientation.TOP_BOTTOM
+                colors = intArrayOf(0x5CFFFFFF, 0x26FFFFFF)
+                setStroke(dp(context, 2).toInt(), 0x8CFFFFFF.toInt())
+            } else {
+                setColor(theme.cardBackground)
+                setStroke(dp(context, 1).toInt(), theme.cardBorder)
+            }
         }
 
     /**
