@@ -29,7 +29,7 @@ android {
     // Ключ Яндекс.Погоды (v2 API): free-ключ из local.properties,
     // строка yandexweather.key. Не хранится в git.
     val yandexKey = try {
-        val propsY = java.util.Properties()
+        val propsY = Properties()
         val localY = rootProject.file("local.properties")
         if (localY.exists()) {
             localY.inputStream().use { propsY.load(it) }
