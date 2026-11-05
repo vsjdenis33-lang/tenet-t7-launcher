@@ -18,11 +18,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Unzip project archive
+      - name: Find and unzip project archive
         run: |
-          ZIPFILE=$(ls *.zip 2>/dev/null | head -n 1)
+          ZIPFILE=$(find . -name '*.zip' -not -path './.git/*' | head -n 1)
           if [ -z "$ZIPFILE" ]; then
-            echo "::error::No zip archive found in repo root"
+            echo "::error::No zip archive found in repo"
             exit 1
           fi
           echo "Unpacking $ZIPFILE"
