@@ -1,0 +1,48 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Unzip project archive
+        run: |
+          ZIPFILE=$(ls *.zip 2>/dev/null | head -n 1)
+          if [ -z "$ZIPFILE" ]; then
+            echo "::error::No zip archive found in repo root"
+            exit 1
+          fi
+          echo "Unpacking $ZIPFILE"
+          unzip -oq "$ZIPFILE" -d extracted
+          PROJECT_DIR=$(find extracted -maxdepth 2 -name gradlew -type f -printf '%h\n' | head -n 1)
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "::error::gradlew not found inside archive"
+            exit 1
+          fi
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Build debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dash-apk
+          path: extracted/**/build/outputs/apk/**/*.apk
+          if-no-files-found: error
